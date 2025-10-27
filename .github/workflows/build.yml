@@ -15,18 +15,30 @@ jobs:
       with:
         fetch-depth: 0
 
-    - name: Download files
+    - name: Download files and build (enable USB + add kmods)
       run: |
         sudo apt update
-        sudo apt install tar build-essential file libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 python3-full python3-venv -y
+        sudo apt install -y tar build-essential file libncurses-dev zlib1g-dev gawk git gettext libssl-dev xsltproc rsync wget unzip python3 python3-full python3-venv squashfs-tools binwalk
         mkdir -p downloads
         cd downloads
-        wget https://downloads.openwrt.org/snapshots/targets/ramips/mt76x8/openwrt-imagebuilder-ramips-mt76x8.Linux-x86_64.tar.zst
+        # используем snapshot Image Builder (как в оригинале). Можно заменить на релизную версию при желании.
+        wget -c https://downloads.openwrt.org/snapshots/targets/ramips/mt76x8/openwrt-imagebuilder-ramips-mt76x8.Linux-x86_64.tar.zst
         tar --zstd -xf openwrt-imagebuilder-*.tar.zst
         cd openwrt-imagebuilder-*/
-        sed -i 's/disabled/okay/g' target/linux/ramips/dts/mt7628an_xiaomi_mi-router-4c.dts
-        make image PROFILE="xiaomi_mi-router-4c" PACKAGES="apk-mbedtls base-files ca-bundle dnsmasq dropbear firewall4 fstools kmod-gpio-button-hotplug kmod-leds-gpio kmod-mt7603 kmod-nft-offload libc libgcc libustream-mbedtls logd mtd netifd nftables odhcp6c odhcpd-ipv6only ppp ppp-mod-pppoe swconfig uci uclient-fetch urandom-seed urngd wpad-basic-mbedtls uboot-envtools luci kmod-mt76 kmod-mtd-rw iw-full ip-full ethtool-full UDPspeeder zram-swap kmod-lib-lz4 nano netdiscover nmap luci-app-ttyd arp-scan arp-scan-database sudo"
-        
+        # безопасно включаем USB-узел только внутри блока usb@ (не трогаем все disabled)
+        sed -n '1,240p' target/linux/ramips/dts/mt7628an_xiaomi_mi-router-4c.dts >/tmp/dts_head || true
+        # меняем статус только в блоке usb@ ... };
+        perl -0777 -pe 's/(usb@[^{]*\{.*?status\s*=\s*")[^"]*(".*?\})/ $1 . "okay" . $2 /seg' -i target/linux/ramips/dts/mt7628an_xiaomi_mi-router-4c.dts || true
+        # или, если perl выражение не отработало, применим более целенаправленную замену внутри блока usb@
+        sed -i '/usb@/,/};/ s/status = "disabled"/status = "okay"/' target/linux/ramips/dts/mt7628an_xiaomi_mi-router-4c.dts || true
+
+        # --- Минимальный тестовый набор пакетов (быстро) ---
+        # Сначала пробная сборка с минимальными USB-пакетами:
+        make image PROFILE="xiaomi_mi-router-4c" PACKAGES="kmod-usb-core kmod-usb2 kmod-ehci-hcd kmod-ohci kmod-uhci-hcd kmod-usb-storage kmod-scsi-core kmod-fs-ext4 block-mount usbutils" -j$(nproc)
+
+        # Если хотите полный набор (раскомментируйте и используйте вместо строки выше):
+        # make image PROFILE="xiaomi_mi-router-4c" PACKAGES="apk-mbedtls base-files ca-bundle dnsmasq dropbear firewall4 fstools kmod-gpio-button-hotplug kmod-leds-gpio kmod-mt7603 kmod-nft-offload libc libgcc libustream-mbedtls logd mtd netifd nftables odhcp6c odhcpd-ipv6only opkg ppp ppp-mod-pppoe swconfig uci uclient-fetch urandom-seed urngd wpad-basic-mbedtls uboot-envtools luci kmod-mt76 kmod-mtd-rw iw-full ethtool-full ip-full UDPspeeder zram-swap nano netdiscover kmod-usb-core kmod-usb2 kmod-ehci-hcd kmod-ohci kmod-uhci-hcd kmod-usb-storage kmod-scsi-core kmod-fs-ext4 block-mount usbutils" -j$(nproc)
+
     - name: Determine release tag
       id: get_tag
       run: |
